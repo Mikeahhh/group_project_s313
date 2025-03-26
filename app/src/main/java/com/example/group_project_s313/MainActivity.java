@@ -2,6 +2,8 @@ package com.example.group_project_s313;
 
 import android.os.Bundle;
 import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
+import android.view.View;
 import android.widget.*;
 import androidx.fragment.app.FragmentActivity;
 import com.google.android.gms.maps.*;
@@ -23,23 +25,26 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
 
     private String googleApiKey = "AIzaSyDeZLXmQFT4kQTVQh6MUw4--1xYvRqRzy8"; // ⚠️ 替换为你的 API Key
 
+    private TextView textViewAI; // AI 推荐的 TextView
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         textViewResult = findViewById(R.id.textViewResult);
-        textViewResult.setMovementMethod(new ScrollingMovementMethod()); // **启用 TextView 内部滚动**
+        textViewAI = findViewById(R.id.textViewAI); // 绑定 AI 推荐 TextView
+        textViewResult.setMovementMethod(new ScrollingMovementMethod());
+        textViewAI.setMovementMethod(new ScrollingMovementMethod()); // 让 AI 推荐可以滚动
 
         editTextStart = findViewById(R.id.editTextStart);
         editTextEnd = findViewById(R.id.editTextEnd);
-        textViewResult = findViewById(R.id.textViewResult);
         Button buttonSearch = findViewById(R.id.buttonSearch);
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.mapFragment);
         mapFragment.getMapAsync(this);
 
-        fetchStopNames(); // 获取 KMB 站点数据
+        fetchStopNames(); // 获取站点数据
 
         buttonSearch.setOnClickListener(v -> searchBusRoutes());
     }
@@ -59,7 +64,8 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
 
         client.newCall(stopRequest).enqueue(new Callback() {
             @Override
-            public void onFailure(Call call, IOException e) {}
+            public void onFailure(Call call, IOException e) {
+            }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
@@ -103,6 +109,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         }
 
         fetchGoogleTransitRoute(origin, destination);
+        fetchAIRecommendations(destination); // 将 AI 推荐调用移至此处
     }
 
     /**
@@ -170,7 +177,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
                             busInfo.append("🚌 搭乘路线：").append(busNumber).append("\n")
                                     .append("🚏 上车站：").append(departureStop).append("\n")
                                     .append("🏁 下车站：").append(arrivalStop).append("\n")
-                                    .append("⏳ 预计到达时间：").append(arrivalTime).append("\n\n"); // **新增行**
+                                    .append("⏳ 预计到达时间：").append(arrivalTime).append("\n\n");
 
                             runOnUiThread(() -> {
                                 mMap.addMarker(new MarkerOptions().position(startPoint)
@@ -190,7 +197,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
                             mMap.addPolyline(new PolylineOptions().addAll(routePoints).color(0xFF0000FF).width(10));
                             mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 150));
                         }
-                        textViewResult.setText(busInfo.toString()); // **更新 UI，显示预计到达时间**
+                        textViewResult.setText(busInfo.toString());
                     });
 
                 } catch (JSONException e) {
@@ -198,5 +205,94 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
                 }
             }
         });
+    }
+    /**
+     * 调用 ChatAnywhere API 获取 AI 推荐
+     */
+    private void fetchAIRecommendations(String destinationName) {
+        String apiUrl = "https://api.chatanywhere.org/v1/chat/completions";
+        String chatAnywhereApiKey = "sk-oc1GhqILDr49mChvU5vEIaHmRzc42LPYhMsmsWPpo1YpEeTF";
+
+        try {
+            JSONObject systemMsg = new JSONObject();
+            systemMsg.put("role", "system");
+            systemMsg.put("content", "你是一个旅游推荐助手");
+
+            JSONObject userMsg = new JSONObject();
+            userMsg.put("role", "user");
+            userMsg.put("content", "请推荐" + destinationName + "附近的美食和旅游景点");
+
+            JSONArray messages = new JSONArray();
+            messages.put(systemMsg);
+            messages.put(userMsg);
+
+            JSONObject requestBody = new JSONObject();
+            requestBody.put("model", "gpt-3.5-turbo");
+            requestBody.put("messages", messages);
+            requestBody.put("max_tokens", 1000); // 关键点：增加生成内容长度
+
+            RequestBody body = RequestBody.create(
+                    requestBody.toString(),
+                    MediaType.parse("application/json")
+            );
+
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .post(body)
+                    .addHeader("Authorization", "Bearer " + chatAnywhereApiKey)
+                    .build();
+
+            client.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    runOnUiThread(() ->
+                            textViewAI.setText("AI推荐失败: " + e.getMessage())
+                    );
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) throws IOException {
+                    if (!response.isSuccessful()) {
+                        runOnUiThread(() ->
+                                textViewAI.setText("错误码: " + response.code())
+                        );
+                        return;
+                    }
+
+                    try {
+                        String jsonStr = response.body().string();
+                        JSONObject json = new JSONObject(jsonStr);
+                        JSONArray choices = json.getJSONArray("choices");
+
+                        if (choices.length() > 0) {
+                            JSONObject firstChoice = choices.getJSONObject(0);
+                            JSONObject message = firstChoice.getJSONObject("message");
+                            String content = message.getString("content");
+
+                            // 打印完整内容到日志
+                            Log.d("AI_Response", "完整内容: " + content);
+
+                            runOnUiThread(() -> {
+                                textViewAI.setText("🎯 AI推荐：\n" + content);
+                                textViewAI.post(() -> {
+                                    // 自动滚动到底部（可选）
+                                    ScrollView scrollView = (ScrollView) textViewAI.getParent();
+                                    scrollView.fullScroll(View.FOCUS_DOWN);
+                                });
+                            });
+                        }
+                    } catch (JSONException e) {
+                        runOnUiThread(() ->
+                                textViewAI.setText("解析错误")
+                        );
+                    }
+                }
+            });
+
+        } catch (JSONException e) {
+            runOnUiThread(() ->
+                    textViewAI.setText("请求构建错误")
+            );
+        }
     }
 }
